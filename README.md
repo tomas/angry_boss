@@ -32,6 +32,11 @@ Monitoring
 
 Angry Boss will leave an angry_boss.pid file in RAILS_ROOT/tmp/pids, so you can use God or Monit to make sure it keeps doing its job. As all workers descend from the master process, you can also monitor the total amount of memory used by all workers, so you can tune your settings to set the right limit on the maximum number of workers.
 
+TODO
+--
+
+Add some tests. It works though. :)
+
 Copyright
 --
 
