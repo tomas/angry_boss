@@ -1,4 +1,4 @@
-Angry Boss -- Manage Delayed::Workers dynamically
+Angry Boss!
 ======
 
 This is a simple script that takes care of managing pools of Delayed::Job workers dynamically.
@@ -25,7 +25,7 @@ Copy angry_boss to your RAILS_ROOT/script directly. Chmod it +x and start it, pa
     $ cd /path/to/your/rails/app
     $ RAILS_ENV=whatever script/angry_boss start 10
 
-This will load your app's environment and start spawning workers until the count reaches ten. If you call Angry Boss with 0 workers, it will spawn a single worker for one loop, so you can test that your jobs are being processed correctly.
+This will load your app's environment and start spawning workers until the count reaches 10, as long as there are pending jobs in queue. If you call Angry Boss with 0 workers, it will spawn a single worker for one loop, so you can test that your jobs are being processed correctly.
 
 Monitoring
 --
