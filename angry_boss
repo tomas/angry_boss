@@ -1,0 +1,265 @@
+#!/usr/bin/env ruby
+#####################################
+# Angry Boss - Manage delayed workers dynamically
+# Written by Tomás Pollak <tomas@forkhq.com>
+# (c) 2010 - Fork Ltd.
+# Licensed under the MIT license
+#####################################
+
+require 'fileutils'
+
+$VERBOSE=nil # supress warnings
+ENV['RAILS_ENV'] ||= 'production'
+
+#####################################
+# workers config
+#####################################
+
+MAX_WORKERS = 10
+JOBS_PER_BATCH = 5
+MAX_LOOPS = 5
+WORKERS = []
+
+#####################################
+# rails stuff
+#####################################
+::RAILS_ROOT = File.dirname(File.expand_path(__FILE__)) + "/.."
+
+#####################################
+# pid stuff
+#####################################
+HANDLE = File.basename($0)
+PID_DIR = "#{RAILS_ROOT}/tmp/pids"
+PIDFILE = "#{PID_DIR}/#{HANDLE}.pid"
+
+######################################
+# process, pids functions
+######################################
+
+def store_pid(pid)
+	File.open(PIDFILE,"w") {|f| f.write(pid) }
+end
+
+def remove_pidfile
+	FileUtils.rm(PIDFILE)
+end
+
+def process_running?(pid)
+	begin
+		Process.kill(0, pid.to_i)
+		true
+	rescue Errno::ESRCH
+		false
+	end
+end
+
+def kill_process(pid)
+	begin
+		Process.kill("TERM", pid.to_i)
+		true
+	rescue Errno::ESRCH
+		puts " -- Process not running!"
+		false
+	end
+end
+
+def logger
+	Delayed::Worker.logger
+end
+
+######################################
+# job counts
+######################################
+
+module Jobs
+
+	def self.pending
+		# return 10000
+		# ::Delayed::Job.count(:conditions => ["failed_at IS NULL and run_at <= ?", Time.now])
+		::Delayed::Job.ready_to_run('delayed_job', JOBS_PER_BATCH).count
+	end
+
+	def self.working
+		::Delayed::Job.count(:conditions => 'locked_by IS NOT NULL')
+	end
+
+end
+
+#######################################
+# main
+#######################################
+
+def stop
+
+	if File.exist?(PIDFILE)
+		kill_process(File.read(PIDFILE))
+		remove_pidfile
+		true
+	else
+		puts "No pidfile found! Are you sure at least #{HANDLE} is running?"
+		false
+	end
+
+end
+
+def start(max_workers = MAX_WORKERS)
+
+	# models should be loaded by now, as well as delayed job
+	Delayed::Worker.backend.before_fork
+
+	# for debugging
+	if max_workers.to_i == 0
+		puts 'Debug mode! Running one worker...'
+		res = start_worker(1, 1)
+		puts res.inspect
+		abort
+	end
+
+	Process.daemon(RAILS_ROOT, true)
+
+	@boss_pid = $$
+	store_pid(@boss_pid)
+	ENV['ANGRY_BOSS_PID'] = @boss_pid.to_s
+
+	logger.info "Setting up traps..."
+
+	Signal.trap('INT')  { $exit = true }
+	Signal.trap('TERM') { $exit = true }
+
+	Signal.trap('EXIT') do
+		if Process.pid == @boss_pid
+			logger.info "Exiting..."
+			kill_all_workers
+			remove_pidfile
+		end
+	end
+
+	Signal.trap("CLD") do
+		begin
+			pid = Process.wait
+			logger.info "Child terminated: #{pid}"
+			WORKERS.delete pid
+		rescue Errno::ECHILD => e # no child processes
+			logger.info e.message
+			check_zombie_workers
+			# WORKERS.drop(WORKERS.count)
+			# stop && start
+		end
+	end
+
+	logger.info "Checking jobs..."
+
+	loops = 0
+	loop do
+		pending_jobs = Jobs.pending
+		logger.info "#{pending_jobs} jobs pending. #{WORKERS.count} workers running. On loop #{loops}!"
+
+		if pending_jobs > 0 and WORKERS.count < max_workers.to_i
+
+			pid = fork do
+				start_worker(WORKERS.count)
+			end
+
+			ActiveRecord::Base.connection.reconnect!
+			Process.detach(pid)
+			WORKERS.push pid
+		end
+
+		break if $exit
+		sleep 2
+		loops += 1
+		check_zombie_workers if loops % JOBS_PER_BATCH*max_workers.to_i == 0
+	end
+
+end
+
+######################################
+# workers
+######################################
+
+def check_zombie_workers
+	logger.info 'Checking for zombie workers!'
+	WORKERS.each do |pid|
+		unless process_running?(pid)
+			logger.info "Worker #{pid} is not running!"
+			WORKERS.delete(pid)
+		end
+	end
+end
+
+def kill_all_workers
+	logger.info "Shutting down all children!"
+	WORKERS.each do |pid|
+		begin
+			Process.kill('HUP', pid)
+		rescue
+			#
+		end
+	end
+end
+
+def start_worker(id, jobs = JOBS_PER_BATCH)
+
+	logger.info "Spawning worker ##{id}..."
+	$0 = "worker ##{id} running #{jobs} jobs"
+
+	Delayed::Worker.backend.after_fork
+	worker = Delayed::Worker.new(:min_priority => ENV['MIN_PRIORITY'], :max_priority => ENV['MAX_PRIORITY'], :quiet => false)
+	worker.name_prefix = "#{HANDLE}.#{id} "
+
+	Signal.trap('HUP') do
+		$fired = true
+	end
+
+	loops = 0
+	result = loop do
+		result = worker.work_off(jobs)
+		sleep Delayed::Worker.sleep_delay
+		loops += 1
+		break result if $fired or Jobs.pending == 0 or !process_running?(@boss_pid) or loops == MAX_LOOPS
+	end
+
+end
+
+######################################
+# main
+######################################
+
+case ARGV[0]
+
+#	when 'restart'
+
+#		if stop
+#			puts "Waiting 5 seconds..."
+#			sleep 5
+#		end
+#		start
+
+	when 'stop'
+
+		stop
+
+	when 'start'
+
+		if File.exist?(PIDFILE)
+			puts 'Pidfile found!'
+
+			if process_running?(File.read(PIDFILE))
+				puts "#{HANDLE} already running!"
+				exit 1
+			end
+
+		end
+
+		max_workers = ARGV[1] || MAX_WORKERS
+
+		require "#{RAILS_ROOT}/config/environment"
+		# require "#{RAILS_ROOT}/config/slim_environment"
+		start(max_workers)
+
+	else
+
+		puts "Syntax: script/#{HANDLE} [start|stop|restart] [max_number_of_workers]"
+		puts "To run just one job, run with 0 workers. Useful for testing."
+
+end
