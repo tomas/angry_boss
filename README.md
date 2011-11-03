@@ -17,9 +17,9 @@ This also means you don't need to worry about memory leaks as workers only live 
 Usage
 --
 
-Copy angry_boss to your RAILS_ROOT/script directly. Chmod it +x and start it, passing the max number of workers you wish to be spawned. In other words:
+Just copy the angry_boss script to your RAILS_ROOT/script directory. Make sure it has the executable bit and start it, passing the max number of workers you wish to be spawned. In other words:
 
-    $ git clone https://github.com/tomas/angry_boss.git
+    $ git clone git://github.com/tomas/angry_boss.git
     $ cp angry_boss/angry_boss /path/to/your/rails/app/script
     $ chmod +x /path/to/your/rails/app/script/angry_boss
     $ cd /path/to/your/rails/app
